@@ -1,0 +1,6 @@
+black
+flake8
+pandas
+pyarrow
+pytz
+s3fs

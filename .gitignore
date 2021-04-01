@@ -1,0 +1,11 @@
+*.egg-info
+*.pyc
+.envrc.local
+.venv
+__pycache__
+bin
+bin_linux
+data
+mnt
+temp
+tmp

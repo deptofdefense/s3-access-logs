@@ -1,0 +1,39 @@
+#! /usr/bin/env bash
+
+export USE_AWS_VAULT=true
+
+#####################
+# AWS Configuration #
+#####################
+
+# Set profile for command-line tools (aws, chamber, etc.)
+export AWS_PROFILE=default
+
+# Set the AWS Region
+export AWS_REGION=us-west-2
+
+# Have aws-vault use the login keychain for better timeout behavior
+export AWS_VAULT_KEYCHAIN_NAME=login
+
+# Make Chamber read ~/.aws/config
+export AWS_SDK_LOAD_CONFIG=1
+
+# Disable the default pager for AWS CLI
+export AWS_PAGER=""
+
+####################
+# Script Variables #
+####################
+
+export SRC="s3://src-bucket-name/key"
+export DST="s3://dst-bucket-name/key"
+export HOUR="2021-03-30"
+
+export INPUT_S3_ACL="bucket-owner-full-control"
+export INPUT_S3_ENDPOINT="https://s3-fips.us-west-2.amazonaws.com"
+export INPUT_S3_REGION="us-west-2"
+export INPUT_READY_FLAG=""
+
+export OUTPUT_S3_ACL="bucket-owner-full-control"
+export OUTPUT_S3_ENDPOINT="https://s3-fips.us-west-2.amazonaws.com"
+export OUTPUT_S3_REGION="us-west-2"
