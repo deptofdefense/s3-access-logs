@@ -251,5 +251,12 @@ def main():
     return None
 
 
+def handler(event, context):
+    """
+    This is the lambda handler
+    """
+    main()
+
+
 if __name__ == "__main__":
     main()

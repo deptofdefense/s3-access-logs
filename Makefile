@@ -34,14 +34,25 @@ requirements:  ## Install Python requirements
 editable:  ## Install this repo as editable
 	$(pip) install -e .
 
+.PHONY: package
+package:  ## Create the python package
+	$(py) setup.py build sdist check
+
+#
+# Docker
+#
+
+.PHONY: docker_build
+docker_build: package  ## Build the docker container
+	docker build -f Dockerfile .
 
 #
 # Clean Targets
 #
 
 clean:
-	rm -fr bin
-	rm -fr data
-	rm -fr temp
+	rm -fr build
+	rm -fr dist
 	rm -fr tmp
 	rm -fr *.egg-info
+	rm -fr s3access/__pycache__/
