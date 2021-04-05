@@ -1,0 +1,11 @@
+version: '3.3'
+
+services:
+  s3-access-logs:
+    image: s3-access-logs:latest
+    environment:
+      - SRC=/tmp/input
+      - DST=/tmp/output
+    volumes:
+      - ./tmp/input:/tmp/input
+      - ./tmp/output:/tmp/outpu/

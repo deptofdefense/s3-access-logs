@@ -1,7 +1,7 @@
 #! /usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-from datetime import datetime
+from datetime import datetime, timedelta
 import gc
 import logging
 from multiprocessing import Manager, Pool
@@ -172,15 +172,27 @@ def main():
 
     src = os.getenv("SRC")
     dst = os.getenv("DST")
-    hour = os.getenv("HOUR")
 
-    input_s3_acl = os.getenv("INPUT_S3_ACL")
-    input_s3_endpoint = os.getenv("INPUT_S3_ENDPOINT")
-    input_s3_region = os.getenv("INPUT_S3_REGION")
+    # Default is to look at the previous hour with the assumption that all the logs exist from that period
+    # Importantly this makes it easier to trigger on a cron job and know that the appropriate files are being found
+    default_hour = (now - timedelta(hours=1)).strftime("%Y-%m-%d-%H")
+    hour = os.getenv("HOUR", default_hour)
 
-    output_s3_acl = os.getenv("OUTPUT_S3_ACL")
-    output_s3_endpoint = os.getenv("OUTPUT_S3_ENDPOINT")
-    output_s3_region = os.getenv("OUTPUT_S3_REGION")
+    s3_default_region = os.getenv("AWS_REGION")
+
+    input_s3_acl = os.getenv("INPUT_S3_ACL", "bucket-owner-full-control")
+    input_s3_region = os.getenv("INPUT_S3_REGION", s3_default_region)
+    input_s3_endpoint = os.getenv(
+        "OUTPUT_S3_ENDPOINT",
+        "https://s3-fips.{}.amazonaws.com".format(input_s3_region),
+    )
+
+    output_s3_acl = os.getenv("OUTPUT_S3_ACL", "bucket-owner-full-control")
+    output_s3_region = os.getenv("OUTPUT_S3_REGION", s3_default_region)
+    output_s3_endpoint = os.getenv(
+        "OUTPUT_S3_ENDPOINT",
+        "https://s3-fips.{}.amazonaws.com".format(output_s3_region),
+    )
 
     timeout = int(os.getenv("TIMEOUT", "300"))
 
@@ -196,9 +208,6 @@ def main():
 
     if dst is None or len(dst) == 0:
         raise Exception("{} is missing".format("dst"))
-
-    if hour is None or len(hour) == 0:
-        raise Exception("{} is missing".format("hour"))
 
     if src[len(src) - 1] != "/":
         src = src + "/"
@@ -249,13 +258,6 @@ def main():
     )
 
     return None
-
-
-def handler(event, context):
-    """
-    This is the lambda handler
-    """
-    main()
 
 
 if __name__ == "__main__":

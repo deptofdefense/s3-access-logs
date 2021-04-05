@@ -44,7 +44,11 @@ package:  ## Create the python package
 
 .PHONY: docker_build
 docker_build: package  ## Build the docker container
-	docker build -f Dockerfile .
+	docker build -f Dockerfile . -t s3-access-logs:latest
+
+.PHONY: docker_up
+docker_up: docker_build ## Run docker-compose up
+	docker-compose -f docker-compose.yml up
 
 #
 # Clean Targets
