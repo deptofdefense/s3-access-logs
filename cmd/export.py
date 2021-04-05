@@ -58,6 +58,7 @@ def create_file_system(root, endpoint_url, endpoint_region, s3_acl):
             client_kwargs={
                 "endpoint_url": endpoint_url,
                 "region_name": endpoint_region,
+                "use_ssl": True,
             },
             s3_additional_kwargs={
                 "ACL": s3_acl,
