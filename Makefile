@@ -50,6 +50,10 @@ docker_build: package  ## Build the docker container
 docker_up: ## Run docker-compose up
 	$(AWS_VAULT_PREFIX) docker-compose -f docker-compose.yml up
 
+.PHONY: docker_push
+docker_push: ## Push docker image
+	$(AWS_VAULT_PREFIX) ./scripts/push_container.sh
+
 #
 # Clean Targets
 #
