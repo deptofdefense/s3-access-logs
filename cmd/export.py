@@ -7,6 +7,7 @@ import logging
 from multiprocessing import Pool
 import os
 from pathlib import Path
+import threading
 from urllib.parse import urlparse
 
 import pandas as pd
@@ -17,6 +18,36 @@ import s3fs
 from s3access.normalize import deserialize_file
 from s3access.parquet import write_dataset
 from s3access.schema import create_schema
+
+
+class WaitGroup(object):
+    """WaitGroup is like Go sync.WaitGroup.
+
+    Without all the useful corner cases.
+    """
+
+    def __init__(self, timeout=None):
+        self.count = 0
+        self.cv = threading.Condition()
+        self.timeout = timeout
+
+    def add(self, n):
+        self.cv.acquire()
+        self.count += n
+        self.cv.release()
+
+    def done(self):
+        self.cv.acquire()
+        self.count -= 1
+        if self.count == 0:
+            self.cv.notify_all()
+        self.cv.release()
+
+    def wait(self):
+        self.cv.acquire()
+        while self.count > 0:
+            self.cv.wait(timeout=self.timeout)
+        self.cv.release()
 
 
 def parse_time(object_name):
@@ -87,13 +118,19 @@ def aggregate_range(
     with Pool(processes=int(cpu_count)) as pool:
         results = []
 
+        wg = WaitGroup(timeout=timeout)
+
         def append_items(outputs):
             items.extend(outputs)
+            wg.done()
+            for item in outputs:
+                logger.info("Completed deserializing item: {}".format(item["key"]))
 
         def log_error(err):
             logger.error(err)
 
         for f in files.itertuples():
+            wg.add(1)
             result = pool.apply_async(
                 deserialize_file,
                 args=(f.path, input_file_system),
@@ -104,7 +141,7 @@ def aggregate_range(
 
         logger.info("Waiting for deserialization to complete")
 
-        [result.wait(timeout=timeout) for result in results]
+        wg.wait()
 
     logger.info("Deserialization data in files complete")
 
