@@ -4,7 +4,7 @@
 from datetime import datetime, timedelta
 import gc
 import logging
-from multiprocessing import Manager, Pool
+from multiprocessing import Pool
 import os
 from pathlib import Path
 from urllib.parse import urlparse
@@ -82,31 +82,31 @@ def aggregate_range(
 
     items = []
 
-    with Manager() as manager:  # noqa: F841
-        logger.info("Deserializing data in files")
+    logger.info("Deserializing data in files from {}".format(src))
 
+    with Pool(processes=int(cpu_count)) as pool:
         results = []
 
-        pool = Pool(processes=int(cpu_count))
+        def append_items(outputs):
+            items.extend(outputs)
+
+        def log_error(err):
+            logger.error(err)
 
         for f in files.itertuples():
             result = pool.apply_async(
                 deserialize_file,
                 args=(f.path, input_file_system),
+                callback=append_items,
+                error_callback=log_error,
             )
             results += [result]
 
-        pool.close()
-
         logger.info("Waiting for deserialization to complete")
 
-        for i in range(len(results)):
-            try:
-                items.extend(results[i].get(timeout=timeout))
-            except Exception as err:
-                logger.info("Error deserializing", files[i]["path"], err)
+        [result.wait(timeout=timeout) for result in results]
 
-        logger.info("Deserialization complete")
+    logger.info("Deserialization data in files complete")
 
     if len(items) == 0:
         return
@@ -117,8 +117,8 @@ def aggregate_range(
 
     logger.info("Serializing {} items to {}".format(len(items), dst))
 
+    # Drop the memory footprint and garbage collect
     items = []
-
     gc.collect()
 
     write_dataset(
@@ -134,11 +134,7 @@ def aggregate_range(
         timeout=timeout,
     )
 
-    logger.info(
-        "Done serializing items to {}".format(
-            dst,
-        )
-    )
+    logger.info("Serializing items to {} is complete".format(dst))
 
 
 def main():
@@ -154,7 +150,6 @@ def main():
     #
 
     utc = pytz.timezone("UTC")
-
     now = datetime.now(utc)
 
     #
@@ -197,12 +192,19 @@ def main():
 
     timeout = int(os.getenv("TIMEOUT", "300"))
 
-    logger.info("now: {}".format(now))
-    logger.info("cpu_count: {}".format(cpu_count))
-    logger.info("src: {}".format(src))
-    logger.info("dst: {}".format(dst))
-    logger.info("hour: {}".format(hour))
-    logger.info("timeout: {}".format(timeout))
+    logger.info("now:        {}".format(now))
+    logger.info("cpu_count:  {}".format(cpu_count))
+    logger.info("src:        {}".format(src))
+    logger.info("dst:        {}".format(dst))
+    logger.info("hour:       {}".format(hour))
+    logger.info("timeout:    {}".format(timeout))
+    logger.info("aws-region: {}".format(s3_default_region))
+    logger.info("input_s3_acl:       {}".format(input_s3_acl))
+    logger.info("input_s3_region:    {}".format(input_s3_region))
+    logger.info("input_s3_endpoint:  {}".format(input_s3_endpoint))
+    logger.info("output_s3_acl:      {}".format(output_s3_acl))
+    logger.info("output_s3_region:   {}".format(output_s3_region))
+    logger.info("output_s3_endpoint: {}".format(output_s3_endpoint))
 
     if src is None or len(src) == 0:
         raise Exception("{} is missing".format("src"))
