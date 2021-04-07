@@ -87,7 +87,7 @@ def aggregate_range(
 
         results = []
 
-        pool = Pool(processes=int(cpu_count / 2))
+        pool = Pool(processes=int(cpu_count))
 
         for f in files.itertuples():
             result = pool.apply_async(
