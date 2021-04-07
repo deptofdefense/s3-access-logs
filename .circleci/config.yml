@@ -1,0 +1,22 @@
+version: '2.1'
+
+executors:
+  python:
+    working_directory: ~/project
+    docker:
+      - image: cimg/python:3.8
+
+jobs:
+  test_python:
+    executor: python
+    steps:
+      - checkout
+      - run: pip install black==20.8b1 flake8==3.8.4
+      - run: black cmd/*.py s3access/*.py
+      - run: flake8 cmd/*.py s3access/*.py
+
+workflows:
+  version: 2
+  main:
+    jobs:
+      - test_python
