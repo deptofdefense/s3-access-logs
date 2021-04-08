@@ -83,7 +83,7 @@ def transform_items(items):
     return [transform_item(item) for item in items]
 
 
-def deserialize_file(f, fs, logger):
+def deserialize_file(f, fs, queue):
     items = transform_items(deserialize(src=f, format="csv", fs=fs))
-    logger.info("Completed deserializing {}".format(f))
+    queue.put("Completed deserializing {}".format(f))
     return items

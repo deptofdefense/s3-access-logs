@@ -10,8 +10,8 @@ from pyarrow.util import guid
 from s3access.wg import WaitGroup
 
 
-def write_partition(df, full_path, cols, schema, compression, fs, logger):
-    logger.info("write_partition: {}".format(full_path))
+def write_partition(df, full_path, cols, schema, compression, fs, queue):
+    queue.put("write_partition: {}".format(full_path))
     try:
         writer = pq.ParquetWriter(
             full_path, schema, compression=compression, filesystem=fs
@@ -22,7 +22,7 @@ def write_partition(df, full_path, cols, schema, compression, fs, logger):
 
         writer.close()
     except Exception as err:
-        logger.error("Unable to write partition {}: {}".format(full_path, err))
+        queue.put("Unable to write partition {}: {}".format(full_path, err))
         traceback.print_exc()
 
 
@@ -40,7 +40,7 @@ def write_dataset(
     cpu_count=None,
     makedirs=False,
     timeout=None,
-    logger=None,
+    queue=None,
 ):
 
     df = table.to_pandas()
@@ -103,7 +103,7 @@ def write_dataset(
                     subschema,
                     compression,
                     fs,
-                    logger,
+                    queue,
                 ),
                 callback=write_partition_callback,
                 error_callback=write_partition_error_callback,

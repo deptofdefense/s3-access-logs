@@ -4,7 +4,7 @@
 from datetime import datetime, timedelta
 import gc
 import logging
-from multiprocessing import Pool
+from multiprocessing import Pool, Process, Manager
 import os
 from pathlib import Path
 import traceback
@@ -84,6 +84,7 @@ def aggregate_range(
     outputFileSystem,
     cpu_count,
     timeout,
+    queue,
 ):
 
     items = []
@@ -106,7 +107,7 @@ def aggregate_range(
             wg.add(1)
             pool.apply_async(
                 deserialize_file,
-                args=(f.path, input_file_system, logger),
+                args=(f.path, input_file_system, queue),
                 callback=deserialize_file_callback,
                 error_callback=deserialize_file_error_callback,
             )
@@ -141,10 +142,34 @@ def aggregate_range(
         cpu_count=cpu_count,
         makedirs=(not dst.startswith("s3://")),
         timeout=timeout,
-        logger=logger,
+        queue=queue,
     )
 
     logger.info("Serializing items to {} is complete".format(dst))
+
+
+def configure_logging():
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)
+    ch = logging.StreamHandler()
+    ch.setLevel(logging.INFO)
+    logger.addHandler(ch)
+
+    return logger
+
+
+def logging_process(queue, timeout=60):
+    logger = configure_logging()
+    while True:
+        try:
+            record = queue.get(True, timeout)
+            # We send this as a sentinel to tell the listener to quit.
+            if record is None:
+                break
+            logger.info(record)
+        except Exception:
+            print("Error logging record")
+            traceback.print_exc()
 
 
 def main():
@@ -166,11 +191,10 @@ def main():
     # Setup Logging
     #
 
-    logger = logging.getLogger()
-    logger.setLevel(logging.INFO)
-    ch = logging.StreamHandler()
-    ch.setLevel(logging.INFO)
-    logger.addHandler(ch)
+    logger = configure_logging()
+    queue = Manager().Queue(-1)
+    listener = Process(target=logging_process, args=(queue,))
+    listener.start()
 
     #
     # Settings
@@ -292,7 +316,13 @@ def main():
         output_file_system,
         cpu_count,
         timeout,
+        queue,
     )
+
+    # Put one last record on the queue to kill it and then wait
+    queue.put_nowait(None)
+    listener.join()
+    listener.close()
 
     return None
 
