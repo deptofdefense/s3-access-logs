@@ -63,4 +63,5 @@ clean:
 	rm -fr dist
 	rm -fr tmp
 	rm -fr *.egg-info
+	rm -fr MANIFEST
 	rm -fr s3access/__pycache__/
