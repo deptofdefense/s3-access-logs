@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 import os
-from multiprocessing import Pool
+from multiprocessing import get_context
 import traceback
 
 import pyarrow.parquet as pq
@@ -60,7 +60,7 @@ def write_dataset(
         if col in partition_cols:
             subschema = subschema.remove(subschema.get_field_index(col))
 
-    with Pool(processes=int(cpu_count)) as pool:
+    with get_context("spawn").Pool(processes=int(cpu_count)) as pool:
 
         wg = WaitGroup()
 

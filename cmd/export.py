@@ -4,7 +4,7 @@
 from datetime import datetime, timedelta
 import gc
 import logging
-from multiprocessing import Pool, Process, Manager
+from multiprocessing import get_context
 import os
 from pathlib import Path
 import traceback
@@ -91,7 +91,7 @@ def aggregate_range(
 
     logger.info("Deserializing data in files from {}".format(src))
 
-    with Pool(processes=int(cpu_count)) as pool:
+    with get_context("spawn").Pool(processes=int(cpu_count)) as pool:
 
         wg = WaitGroup()
 
@@ -192,8 +192,8 @@ def main():
     #
 
     logger = configure_logging()
-    queue = Manager().Queue(-1)
-    listener = Process(target=logging_process, args=(queue,))
+    queue = get_context("spawn").Manager().Queue(-1)
+    listener = get_context("spawn").Process(target=logging_process, args=(queue,))
     listener.start()
 
     #
