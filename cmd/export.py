@@ -82,7 +82,8 @@ def create_files_index(src, hour, timezone, fs):
     return pd.DataFrame(files)
 
 
-def create_file_system(root, endpoint_url, endpoint_region, s3_acl):
+def create_file_system(root, endpoint_url, endpoint_region, s3_acl, logger):
+    logger.info("Creating filesystem for {}".format(root))
     if root.startswith("s3://"):
         return s3fs.S3FileSystem(
             anon=False,
@@ -95,6 +96,9 @@ def create_file_system(root, endpoint_url, endpoint_region, s3_acl):
                 "ACL": s3_acl,
             },
         )
+    else:
+        os.makedirs(root, exist_ok=True)
+
     return None
 
 
@@ -252,15 +256,18 @@ def main():
     if src[len(src) - 1] != "/":
         src = src + "/"
 
+    if dst[len(dst) - 1] != "/":
+        dst = dst + "/"
+
     #
     # Initialize File Systems
     #
 
     input_file_system = create_file_system(
-        src, input_s3_endpoint, input_s3_region, input_s3_acl
+        src, input_s3_endpoint, input_s3_region, input_s3_acl, logger
     )
     output_file_system = create_file_system(
-        dst, output_s3_endpoint, output_s3_region, output_s3_acl
+        dst, output_s3_endpoint, output_s3_region, output_s3_acl, logger
     )
 
     #
@@ -279,10 +286,31 @@ def main():
     if len(all_files) == 0:
         raise Exception("no source files found within folder {}".format(src))
 
+    logger.info("List all files:")
     logger.info(all_files)
 
-    if not dst.startswith("s3://"):
-        os.makedirs(dst, exist_ok=True)
+    # Test getting a file from the index and reading it
+    if input_file_system is not None:
+        logger.info("Test input filesystem")
+        first = all_files.iloc[0]["path"]
+        if input_file_system.exists(first):
+            logger.info(first)
+            with input_file_system.open(first) as f:
+                line_count = 0
+                for line in f:
+                    line_count += 1
+                logger.info("Lines in first file: {}".format(line_count))
+                logger.info("Read test success!")
+        else:
+            raise Exception("Unable to prove file {} exists".format(first))
+
+    if output_file_system is not None:
+        logger.info("Test output filesystem")
+        write_test = "{}write_test".format(dst)
+        output_file_system.touch(write_test)
+        with s3fs.S3File(output_file_system, write_test, mode="wb") as f:
+            f.write(bytearray("test {}\n".format(datetime.now()), "utf-8"))
+            logger.info("Write test success!")
 
     aggregate_range(
         src,
