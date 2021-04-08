@@ -7,7 +7,7 @@ import logging
 from multiprocessing import Pool
 import os
 from pathlib import Path
-import threading
+import traceback
 from urllib.parse import urlparse
 
 import pandas as pd
@@ -18,36 +18,7 @@ import s3fs
 from s3access.normalize import deserialize_file
 from s3access.parquet import write_dataset
 from s3access.schema import create_schema
-
-
-class WaitGroup(object):
-    """WaitGroup is like Go sync.WaitGroup.
-
-    Without all the useful corner cases.
-    """
-
-    def __init__(self, timeout=None):
-        self.count = 0
-        self.cv = threading.Condition()
-        self.timeout = timeout
-
-    def add(self, n):
-        self.cv.acquire()
-        self.count += n
-        self.cv.release()
-
-    def done(self):
-        self.cv.acquire()
-        self.count -= 1
-        if self.count == 0:
-            self.cv.notify_all()
-        self.cv.release()
-
-    def wait(self):
-        self.cv.acquire()
-        while self.count > 0:
-            self.cv.wait(timeout=self.timeout)
-        self.cv.release()
+from s3access.wg import WaitGroup
 
 
 def parse_time(object_name):
@@ -120,32 +91,29 @@ def aggregate_range(
     logger.info("Deserializing data in files from {}".format(src))
 
     with Pool(processes=int(cpu_count)) as pool:
-        results = []
 
-        wg = WaitGroup(timeout=timeout)
+        wg = WaitGroup()
 
-        def append_items(outputs):
+        def deserialize_file_callback(outputs):
             items.extend(outputs)
             wg.done()
-            for item in outputs:
-                logger.info("Completed deserializing item: {}".format(item["key"]))
 
-        def log_error(err):
-            logger.error(err)
+        def deserialize_file_error_callback(err):
+            traceback.print_exc()
+            raise err
 
         for f in files.itertuples():
             wg.add(1)
-            result = pool.apply_async(
+            pool.apply_async(
                 deserialize_file,
-                args=(f.path, input_file_system),
-                callback=append_items,
-                error_callback=log_error,
+                args=(f.path, input_file_system, logger),
+                callback=deserialize_file_callback,
+                error_callback=deserialize_file_error_callback,
             )
-            results += [result]
 
         logger.info("Waiting for deserialization to complete")
 
-        wg.wait()
+        wg.wait(timeout=timeout)
 
     logger.info("Deserialization data in files complete")
 
@@ -173,6 +141,7 @@ def aggregate_range(
         cpu_count=cpu_count,
         makedirs=(not dst.startswith("s3://")),
         timeout=timeout,
+        logger=logger,
     )
 
     logger.info("Serializing items to {} is complete".format(dst))

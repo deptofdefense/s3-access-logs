@@ -1,15 +1,17 @@
 # -*- coding: utf-8 -*-
 import os
-from multiprocessing import Manager, Pool
+from multiprocessing import Pool
 import traceback
 
 import pyarrow.parquet as pq
 import pyarrow as pa
 from pyarrow.util import guid
 
+from s3access.wg import WaitGroup
 
-def write_partition(df, full_path, cols, schema, compression, fs):
-    print("write_partition:", full_path, fs)
+
+def write_partition(df, full_path, cols, schema, compression, fs, logger):
+    logger.info("write_partition: {}".format(full_path))
     try:
         writer = pq.ParquetWriter(
             full_path, schema, compression=compression, filesystem=fs
@@ -20,7 +22,7 @@ def write_partition(df, full_path, cols, schema, compression, fs):
 
         writer.close()
     except Exception as err:
-        print(err)
+        logger.error("Unable to write partition {}: {}".format(full_path, err))
         traceback.print_exc()
 
 
@@ -38,6 +40,7 @@ def write_dataset(
     cpu_count=None,
     makedirs=False,
     timeout=None,
+    logger=None,
 ):
 
     df = table.to_pandas()
@@ -57,44 +60,53 @@ def write_dataset(
         if col in partition_cols:
             subschema = subschema.remove(subschema.get_field_index(col))
 
-    with Manager() as manager:  # noqa: F841
+    with Pool(processes=int(cpu_count)) as pool:
 
-        with Pool(cpu_count) as pool:
+        wg = WaitGroup()
 
-            results = []
+        def write_partition_callback(outputs):
+            wg.done()
 
-            for keys, dfp in data_df.groupby(partition_keys):
+        def write_partition_error_callback(err):
+            traceback.print_exc()
+            raise err
 
-                if not isinstance(keys, tuple):
-                    keys = (keys,)
+        for keys, dfp in data_df.groupby(partition_keys):
 
-                subdir = "/".join(
-                    [
-                        "{colname}={value}".format(colname=name, value=val)
-                        for name, val in zip(partition_cols, keys)
-                    ]
-                )
+            if not isinstance(keys, tuple):
+                keys = (keys,)
 
-                if makedirs:
-                    os.makedirs(os.path.join(root_path, subdir), exist_ok=True)
+            subdir = "/".join(
+                [
+                    "{colname}={value}".format(colname=name, value=val)
+                    for name, val in zip(partition_cols, keys)
+                ]
+            )
 
-                if partition_filename_cb:
-                    outfile = partition_filename_cb(keys)
-                else:
-                    outfile = guid() + ".parquet"
+            if makedirs:
+                os.makedirs(os.path.join(root_path, subdir), exist_ok=True)
 
-                full_path = os.path.join(root_path, subdir, outfile)
+            if partition_filename_cb:
+                outfile = partition_filename_cb(keys)
+            else:
+                outfile = guid() + ".parquet"
 
-                result = pool.apply_async(
-                    write_partition,
-                    args=(dfp, full_path, row_group_cols, subschema, compression, fs),
-                )
+            full_path = os.path.join(root_path, subdir, outfile)
 
-                results += [result]
+            wg.add(1)
+            pool.apply_async(
+                write_partition,
+                args=(
+                    dfp,
+                    full_path,
+                    row_group_cols,
+                    subschema,
+                    compression,
+                    fs,
+                    logger,
+                ),
+                callback=write_partition_callback,
+                error_callback=write_partition_error_callback,
+            )
 
-            # Wait for all partitions to be written
-            for i in range(len(results)):
-                try:
-                    results[i].get(timeout=timeout)
-                except Exception as err:
-                    print("Error serializing partition", i, err)
+        wg.wait(timeout=timeout)
