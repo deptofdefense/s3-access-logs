@@ -8,5 +8,6 @@ s3access/normalize.py
 s3access/parquet.py
 s3access/schema.py
 s3access/serializer.py
+s3access/wg.py
 global-exclude __pycache__
 global-exclude *.py[co]
