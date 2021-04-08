@@ -7,15 +7,21 @@ repos:
       - id: check-yaml
       - id: detect-private-key
       - id: no-commit-to-branch
+        args: [--branch, main, --pattern, '\d\.\d\.\d']
       - id: requirements-txt-fixer
       - id: trailing-whitespace
       - id: end-of-file-fixer
       - id: fix-encoding-pragma
 
-  - repo: https://github.com/igorshubovych/markdownlint-cli
-    rev: v0.26.0
+  - repo: git://github.com/igorshubovych/markdownlint-cli
+    rev: v0.27.1
     hooks:
       - id: markdownlint
+
+  - repo: https://github.com/pryorda/dockerfilelint-precommit-hooks
+    rev: v0.1.0
+    hooks:
+      - id: dockerfilelint
 
   - repo: https://github.com/ambv/black
     rev: 20.8b1
@@ -27,3 +33,8 @@ repos:
     rev: 3.8.4
     hooks:
       - id: flake8
+
+  - repo: git://github.com/detailyang/pre-commit-shell
+    rev: 1.0.5
+    hooks:
+      - id: shell-lint

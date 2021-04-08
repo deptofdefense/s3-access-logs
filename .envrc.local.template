@@ -25,15 +25,11 @@ export AWS_PAGER=""
 # Script Variables #
 ####################
 
+# These can be s3 or local uris
 export SRC="s3://src-bucket-name/key"
+# export SRC="/full/path/to/local/dir"
 export DST="s3://dst-bucket-name/key"
-export HOUR="2021-03-30"
+# export DST="/full/path/to/local/dir"
 
-export INPUT_S3_ACL="bucket-owner-full-control"
-export INPUT_S3_ENDPOINT="https://s3-fips.us-west-2.amazonaws.com"
-export INPUT_S3_REGION="us-west-2"
-export INPUT_READY_FLAG=""
-
-export OUTPUT_S3_ACL="bucket-owner-full-control"
-export OUTPUT_S3_ENDPOINT="https://s3-fips.us-west-2.amazonaws.com"
-export OUTPUT_S3_REGION="us-west-2"
+# If the hour isn't set then it will use the previous hour's time
+# export HOUR="2021-03-30-04"

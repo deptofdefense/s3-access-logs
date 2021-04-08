@@ -1,11 +1,14 @@
 *.egg-info
-*.pyc
+*.py[o|c]
 .envrc.local
 .venv
 __pycache__
 bin
 bin_linux
+build
 data
+dist
 mnt
 temp
 tmp
+MANIFEST

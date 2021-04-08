@@ -1,12 +1,13 @@
 #! /usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-from datetime import datetime
+from datetime import datetime, timedelta
 import gc
 import logging
-from multiprocessing import Manager, Pool
+from multiprocessing import get_context
 import os
 from pathlib import Path
+import traceback
 from urllib.parse import urlparse
 
 import pandas as pd
@@ -17,6 +18,7 @@ import s3fs
 from s3access.normalize import deserialize_file
 from s3access.parquet import write_dataset
 from s3access.schema import create_schema
+from s3access.wg import WaitGroup
 
 
 def parse_time(object_name):
@@ -51,18 +53,23 @@ def create_files_index(src, hour, timezone, fs):
     return pd.DataFrame(files)
 
 
-def create_file_system(root, endpoint_url, endpoint_region, s3_acl):
+def create_file_system(root, endpoint_url, endpoint_region, s3_acl, logger):
+    logger.info("Creating filesystem for {}".format(root))
     if root.startswith("s3://"):
         return s3fs.S3FileSystem(
             anon=False,
             client_kwargs={
                 "endpoint_url": endpoint_url,
                 "region_name": endpoint_region,
+                "use_ssl": True,
             },
             s3_additional_kwargs={
                 "ACL": s3_acl,
             },
         )
+    else:
+        os.makedirs(root, exist_ok=True)
+
     return None
 
 
@@ -77,35 +84,39 @@ def aggregate_range(
     outputFileSystem,
     cpu_count,
     timeout,
+    queue,
 ):
 
     items = []
 
-    with Manager() as manager:  # noqa: F841
-        logger.info("Deserializing data in files")
+    logger.info("Deserializing data in files from {}".format(src))
 
-        results = []
+    with get_context("spawn").Pool(processes=int(cpu_count)) as pool:
 
-        pool = Pool(processes=int(cpu_count / 2))
+        wg = WaitGroup()
+
+        def deserialize_file_callback(outputs):
+            items.extend(outputs)
+            wg.done()
+
+        def deserialize_file_error_callback(err):
+            traceback.print_exc()
+            raise err
 
         for f in files.itertuples():
-            result = pool.apply_async(
+            wg.add(1)
+            pool.apply_async(
                 deserialize_file,
-                args=(f.path, input_file_system),
+                args=(f.path, input_file_system, queue),
+                callback=deserialize_file_callback,
+                error_callback=deserialize_file_error_callback,
             )
-            results += [result]
-
-        pool.close()
 
         logger.info("Waiting for deserialization to complete")
 
-        for i in range(len(results)):
-            try:
-                items.extend(results[i].get(timeout=timeout))
-            except Exception as err:
-                logger.info("Error deserializing", files[i]["path"], err)
+        wg.wait(timeout=timeout)
 
-        logger.info("Deserialization complete")
+    logger.info("Deserialization data in files complete")
 
     if len(items) == 0:
         return
@@ -116,8 +127,8 @@ def aggregate_range(
 
     logger.info("Serializing {} items to {}".format(len(items), dst))
 
+    # Drop the memory footprint and garbage collect
     items = []
-
     gc.collect()
 
     write_dataset(
@@ -131,13 +142,34 @@ def aggregate_range(
         cpu_count=cpu_count,
         makedirs=(not dst.startswith("s3://")),
         timeout=timeout,
+        queue=queue,
     )
 
-    logger.info(
-        "Done serializing items to {}".format(
-            dst,
-        )
-    )
+    logger.info("Serializing items to {} is complete".format(dst))
+
+
+def configure_logging():
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)
+    ch = logging.StreamHandler()
+    ch.setLevel(logging.INFO)
+    logger.addHandler(ch)
+
+    return logger
+
+
+def logging_process(queue, timeout=60):
+    logger = configure_logging()
+    while True:
+        try:
+            record = queue.get(True, timeout)
+            # We send this as a sentinel to tell the listener to quit.
+            if record is None:
+                break
+            logger.info(record)
+        except Exception:
+            print("Error logging record")
+            traceback.print_exc()
 
 
 def main():
@@ -153,18 +185,16 @@ def main():
     #
 
     utc = pytz.timezone("UTC")
-
     now = datetime.now(utc)
 
     #
     # Setup Logging
     #
 
-    logger = logging.getLogger()
-    logger.setLevel(logging.INFO)
-    ch = logging.StreamHandler()
-    ch.setLevel(logging.INFO)
-    logger.addHandler(ch)
+    logger = configure_logging()
+    queue = get_context("spawn").Manager().Queue(-1)
+    listener = get_context("spawn").Process(target=logging_process, args=(queue,))
+    listener.start()
 
     #
     # Settings
@@ -172,24 +202,43 @@ def main():
 
     src = os.getenv("SRC")
     dst = os.getenv("DST")
-    hour = os.getenv("HOUR")
 
-    input_s3_acl = os.getenv("INPUT_S3_ACL")
-    input_s3_endpoint = os.getenv("INPUT_S3_ENDPOINT")
-    input_s3_region = os.getenv("INPUT_S3_REGION")
+    # Default is to look at the previous hour with the assumption that all the logs exist from that period
+    # Importantly this makes it easier to trigger on a cron job and know that the appropriate files are being found
+    default_hour = (now - timedelta(hours=1)).strftime("%Y-%m-%d-%H")
+    hour = os.getenv("HOUR", default_hour)
 
-    output_s3_acl = os.getenv("OUTPUT_S3_ACL")
-    output_s3_endpoint = os.getenv("OUTPUT_S3_ENDPOINT")
-    output_s3_region = os.getenv("OUTPUT_S3_REGION")
+    s3_default_region = os.getenv("AWS_REGION")
+
+    input_s3_acl = os.getenv("INPUT_S3_ACL", "bucket-owner-full-control")
+    input_s3_region = os.getenv("INPUT_S3_REGION", s3_default_region)
+    input_s3_endpoint = os.getenv(
+        "OUTPUT_S3_ENDPOINT",
+        "https://s3-fips.{}.amazonaws.com".format(input_s3_region),
+    )
+
+    output_s3_acl = os.getenv("OUTPUT_S3_ACL", "bucket-owner-full-control")
+    output_s3_region = os.getenv("OUTPUT_S3_REGION", s3_default_region)
+    output_s3_endpoint = os.getenv(
+        "OUTPUT_S3_ENDPOINT",
+        "https://s3-fips.{}.amazonaws.com".format(output_s3_region),
+    )
 
     timeout = int(os.getenv("TIMEOUT", "300"))
 
-    logger.info("now: {}".format(now))
-    logger.info("cpu_count: {}".format(cpu_count))
-    logger.info("src: {}".format(src))
-    logger.info("dst: {}".format(dst))
-    logger.info("hour: {}".format(hour))
-    logger.info("timeout: {}".format(timeout))
+    logger.info("now:        {}".format(now))
+    logger.info("cpu_count:  {}".format(cpu_count))
+    logger.info("src:        {}".format(src))
+    logger.info("dst:        {}".format(dst))
+    logger.info("hour:       {}".format(hour))
+    logger.info("timeout:    {}".format(timeout))
+    logger.info("aws-region: {}".format(s3_default_region))
+    logger.info("input_s3_acl:       {}".format(input_s3_acl))
+    logger.info("input_s3_region:    {}".format(input_s3_region))
+    logger.info("input_s3_endpoint:  {}".format(input_s3_endpoint))
+    logger.info("output_s3_acl:      {}".format(output_s3_acl))
+    logger.info("output_s3_region:   {}".format(output_s3_region))
+    logger.info("output_s3_endpoint: {}".format(output_s3_endpoint))
 
     if src is None or len(src) == 0:
         raise Exception("{} is missing".format("src"))
@@ -197,21 +246,21 @@ def main():
     if dst is None or len(dst) == 0:
         raise Exception("{} is missing".format("dst"))
 
-    if hour is None or len(hour) == 0:
-        raise Exception("{} is missing".format("hour"))
-
     if src[len(src) - 1] != "/":
         src = src + "/"
+
+    if dst[len(dst) - 1] != "/":
+        dst = dst + "/"
 
     #
     # Initialize File Systems
     #
 
     input_file_system = create_file_system(
-        src, input_s3_endpoint, input_s3_region, input_s3_acl
+        src, input_s3_endpoint, input_s3_region, input_s3_acl, logger
     )
     output_file_system = create_file_system(
-        dst, output_s3_endpoint, output_s3_region, output_s3_acl
+        dst, output_s3_endpoint, output_s3_region, output_s3_acl, logger
     )
 
     #
@@ -230,10 +279,31 @@ def main():
     if len(all_files) == 0:
         raise Exception("no source files found within folder {}".format(src))
 
+    logger.info("List all files:")
     logger.info(all_files)
 
-    if not dst.startswith("s3://"):
-        os.makedirs(dst, exist_ok=True)
+    # Test getting a file from the index and reading it
+    if input_file_system is not None:
+        logger.info("Test input filesystem")
+        first = all_files.iloc[0]["path"]
+        if input_file_system.exists(first):
+            logger.info(first)
+            with input_file_system.open(first) as f:
+                line_count = 0
+                for line in f:
+                    line_count += 1
+                logger.info("Lines in first file: {}".format(line_count))
+                logger.info("Read test success!")
+        else:
+            raise Exception("Unable to prove file {} exists".format(first))
+
+    if output_file_system is not None:
+        logger.info("Test output filesystem")
+        write_test = "{}write_test".format(dst)
+        output_file_system.touch(write_test)
+        with s3fs.S3File(output_file_system, write_test, mode="wb") as f:
+            f.write(bytearray("test {}\n".format(datetime.now()), "utf-8"))
+            logger.info("Write test success!")
 
     aggregate_range(
         src,
@@ -246,7 +316,13 @@ def main():
         output_file_system,
         cpu_count,
         timeout,
+        queue,
     )
+
+    # Put one last record on the queue to kill it and then wait
+    queue.put_nowait(None)
+    listener.join()
+    listener.close()
 
     return None
 

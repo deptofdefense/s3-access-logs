@@ -23,35 +23,34 @@ def transform_item(item):
     output = {
         "bucketowner": item[0],
         "bucket_name": item[1],
-        "requestdatetime": " ".join([item[2], item[3]]),
-        "remoteip": item[4],
-        "requester": item[5],
-        "requestid": item[6],
-        "operation": item[7],
-        "key": item[8],
-        "request_uri": item[9],
-        "httpstatus": item[10],
-        "errorcode": item[11],
-        "bytessent": field_to_int(item[12]),
-        "objectsize": field_to_int(item[13]),
-        "totaltime": field_to_int(item[14]),
-        "turnaroundtime": field_to_int(item[15]),
-        "referrer": item[16],
-        "useragent": item[17],
-        "versionid": item[18],
-        "hostid": item[19],
-        "sigv": item[20],
-        "ciphersuite": item[21],
-        "authtype": item[22],
-        "endpoint": item[23],
-        "tlsversion": item[24],
+        "requestdatetime": item[2],
+        "remoteip": item[3],
+        "requester": item[4],
+        "requestid": item[5],
+        "operation": item[6],
+        "key": item[7],
+        "request_uri": item[8],
+        "httpstatus": item[9],
+        "errorcode": item[10],
+        "bytessent": field_to_int(item[11]),
+        "objectsize": field_to_int(item[12]),
+        "totaltime": field_to_int(item[13]),
+        "turnaroundtime": field_to_int(item[14]),
+        "referrer": item[15],
+        "useragent": item[16],
+        "versionid": item[17],
+        "hostid": item[18],
+        "sigv": item[19],
+        "ciphersuite": item[20],
+        "authtype": item[21],
+        "endpoint": item[22],
+        "tlsversion": item[23],
     }
 
     #
     # Timestamp
     #
-
-    ts = datetime.strptime(output["requestdatetime"][1:-1], "%d/%b/%Y:%H:%M:%S %z")
+    ts = datetime.strptime(output["requestdatetime"], "%d/%b/%Y:%H:%M:%S %z")
     # convert timestamp from decimal to int
     output["ts"] = ts.timestamp()
     # parse timestamp
@@ -84,5 +83,7 @@ def transform_items(items):
     return [transform_item(item) for item in items]
 
 
-def deserialize_file(f, fs):
-    return transform_items(deserialize(src=f, format="csv", fs=fs))
+def deserialize_file(f, fs, queue):
+    items = transform_items(deserialize(src=f, format="csv", fs=fs))
+    queue.put("Completed deserializing {}".format(f))
+    return items

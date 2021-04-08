@@ -1,0 +1,18 @@
+version: '3.3'
+
+services:
+  s3-access-logs:
+    image: s3-access-logs:latest
+    environment:
+      # - SRC=/tmp/input
+      - SRC
+      - DST=/tmp/output
+      - AWS_REGION
+      - AWS_ACCESS_KEY_ID
+      - AWS_SECRET_ACCESS_KEY
+      - AWS_SESSION_TOKEN
+      - AWS_SECURITY_TOKEN
+      - AWS_SESSION_EXPIRATION
+    volumes:
+      - ./tmp/input:/tmp/input
+      - ./tmp/output:/tmp/outpu/
