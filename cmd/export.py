@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import traceback
 from urllib.parse import urlparse
+import uuid
 
 import pandas as pd
 import pyarrow as pa
@@ -202,6 +203,7 @@ def main():
 
     src = os.getenv("SRC")
     dst = os.getenv("DST")
+    tracking_dst = os.getenv("TRACKING_DST")
 
     # Default is to look at the previous hour with the assumption that all the logs exist from that period
     # Importantly this makes it easier to trigger on a cron job and know that the appropriate files are being found
@@ -226,13 +228,14 @@ def main():
 
     timeout = int(os.getenv("TIMEOUT", "300"))
 
-    logger.info("now:        {}".format(now))
-    logger.info("cpu_count:  {}".format(cpu_count))
-    logger.info("src:        {}".format(src))
-    logger.info("dst:        {}".format(dst))
-    logger.info("hour:       {}".format(hour))
-    logger.info("timeout:    {}".format(timeout))
-    logger.info("aws-region: {}".format(s3_default_region))
+    logger.info("now:          {}".format(now))
+    logger.info("cpu_count:    {}".format(cpu_count))
+    logger.info("src:          {}".format(src))
+    logger.info("dst:          {}".format(dst))
+    logger.info("tracking_dst: {}".format(tracking_dst))
+    logger.info("hour:         {}".format(hour))
+    logger.info("timeout:      {}".format(timeout))
+    logger.info("aws-region:   {}".format(s3_default_region))
     logger.info("input_s3_acl:       {}".format(input_s3_acl))
     logger.info("input_s3_region:    {}".format(input_s3_region))
     logger.info("input_s3_endpoint:  {}".format(input_s3_endpoint))
@@ -252,6 +255,9 @@ def main():
     if dst[len(dst) - 1] != "/":
         dst = dst + "/"
 
+    if len(tracking_dst) > 0 and tracking_dst[len(tracking_dst) - 1] != "/":
+        tracking_dst = tracking_dst + "/"
+
     #
     # Initialize File Systems
     #
@@ -262,6 +268,22 @@ def main():
     output_file_system = create_file_system(
         dst, output_s3_endpoint, output_s3_region, output_s3_acl, logger
     )
+    tracking_file_system = None
+    if len(tracking_dst) > 0:
+        tracking_file_system = create_file_system(
+            tracking_dst, output_s3_endpoint, output_s3_region, output_s3_acl, logger
+        )
+
+    #
+    # Check if this task has been completed already
+    #
+
+    if tracking_file_system is not None:
+        logger.info("Checking completion of task for hour: {}".format(hour))
+        tracking_file = "{}{}".format(tracking_dst, hour)
+        if tracking_file_system.exists(tracking_file):
+            logger.info("Task completed for hour: {}!".format(tracking_file))
+            return None
 
     #
     # Load Schema
@@ -277,7 +299,8 @@ def main():
     )
 
     if len(all_files) == 0:
-        raise Exception("no source files found within folder {}".format(src))
+        logger.info("no source files found within folder {}".format(src))
+        return None
 
     logger.info("List all files:")
     logger.info(all_files)
@@ -285,25 +308,33 @@ def main():
     # Test getting a file from the index and reading it
     if input_file_system is not None:
         logger.info("Test input filesystem")
-        first = all_files.iloc[0]["path"]
-        if input_file_system.exists(first):
-            logger.info(first)
-            with input_file_system.open(first) as f:
+        read_test = all_files.iloc[0]["path"]
+        if input_file_system.exists(read_test):
+            logger.info(read_test)
+            with input_file_system.open(read_test) as f:
                 line_count = 0
                 for line in f:
                     line_count += 1
                 logger.info("Lines in first file: {}".format(line_count))
                 logger.info("Read test success!")
         else:
-            raise Exception("Unable to prove file {} exists".format(first))
+            raise Exception("Unable to prove file {} exists".format(read_test))
 
     if output_file_system is not None:
         logger.info("Test output filesystem")
-        write_test = "{}write_test".format(dst)
+        write_test = "{}{}".format(dst, uuid.uuid4())
         output_file_system.touch(write_test)
+        logger.info("Successful create file: {}!".format(write_test))
         with s3fs.S3File(output_file_system, write_test, mode="wb") as f:
-            f.write(bytearray("test {}\n".format(datetime.now()), "utf-8"))
-            logger.info("Write test success!")
+            f.write(
+                bytearray(
+                    "test for {}. Now: {}\n".format(hour, datetime.now()), "utf-8"
+                )
+            )
+            logger.info("Successful write for file: {}!".format(write_test))
+        output_file_system.rm(write_test)
+        logger.info("Successfully deleted file: {}".format(write_test))
+        logger.info("Write test success for file {}!".format(write_test))
 
     aggregate_range(
         src,
@@ -324,8 +355,23 @@ def main():
     listener.join()
     listener.close()
 
+    if tracking_file_system is not None:
+        logger.info("Tracking completion of task")
+        tracking_file = "{}{}".format(tracking_dst, hour)
+        tracking_file_system.touch(tracking_file)
+        with s3fs.S3File(tracking_file_system, tracking_file, mode="wb") as f:
+            f.write(
+                bytearray(
+                    "Completed hour {}. Now: {}\n".format(hour, datetime.now()), "utf-8"
+                )
+            )
+        logger.info("Successful creation file: {}!".format(tracking_file))
+
     return None
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        print(e)
