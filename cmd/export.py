@@ -286,25 +286,33 @@ def main():
     # Test getting a file from the index and reading it
     if input_file_system is not None:
         logger.info("Test input filesystem")
-        first = all_files.iloc[0]["path"]
-        if input_file_system.exists(first):
-            logger.info(first)
-            with input_file_system.open(first) as f:
+        read_test = all_files.iloc[0]["path"]
+        if input_file_system.exists(read_test):
+            logger.info(read_test)
+            with input_file_system.open(read_test) as f:
                 line_count = 0
                 for line in f:
                     line_count += 1
                 logger.info("Lines in first file: {}".format(line_count))
                 logger.info("Read test success!")
         else:
-            raise Exception("Unable to prove file {} exists".format(first))
+            raise Exception("Unable to prove file {} exists".format(read_test))
 
     if output_file_system is not None:
         logger.info("Test output filesystem")
         write_test = "{}{}".format(dst, uuid.uuid4())
         output_file_system.touch(write_test)
+        logger.info("Successful create file: {}!".format(write_test))
         with s3fs.S3File(output_file_system, write_test, mode="wb") as f:
-            f.write(bytearray("test {}\n".format(datetime.now()), "utf-8"))
-            logger.info("Write test success!")
+            f.write(
+                bytearray(
+                    "test for {}. Now: {}\n".format(hour, datetime.now()), "utf-8"
+                )
+            )
+            logger.info("Successful write for file: {}!".format(write_test))
+        output_file_system.rm(write_test)
+        logger.info("Successfully deleted file: {}".format(write_test))
+        logger.info("Write test success for file {}!".format(write_test))
 
     aggregate_range(
         src,
