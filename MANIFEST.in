@@ -1,13 +1,8 @@
 include CONTRIBUTING.md
 include LICENSE
 include README.md
-setup.cfg
-setup.py
-s3access/__init__.py
-s3access/normalize.py
-s3access/parquet.py
-s3access/schema.py
-s3access/serializer.py
-s3access/wg.py
+include setup.cfg
+include setup.py
+recursive-include s3access *.py
 global-exclude __pycache__
 global-exclude *.py[co]
