@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import traceback
 from urllib.parse import urlparse
+import uuid
 
 import pandas as pd
 import pyarrow as pa
@@ -299,7 +300,7 @@ def main():
 
     if output_file_system is not None:
         logger.info("Test output filesystem")
-        write_test = "{}write_test".format(dst)
+        write_test = "{}{}".format(dst, uuid.uuid4())
         output_file_system.touch(write_test)
         with s3fs.S3File(output_file_system, write_test, mode="wb") as f:
             f.write(bytearray("test {}\n".format(datetime.now()), "utf-8"))
