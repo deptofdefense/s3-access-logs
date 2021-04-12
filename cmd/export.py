@@ -159,11 +159,12 @@ def configure_logging():
     return logger
 
 
-def logging_process(queue, timeout=60):
+def logging_process(queue):
     logger = configure_logging()
     while True:
         try:
-            record = queue.get(True, timeout)
+            # Don't add a timeout here, it just adds log noise
+            record = queue.get(True)
             # We send this as a sentinel to tell the listener to quit.
             if record is None:
                 break
@@ -255,8 +256,9 @@ def main():
     if dst[len(dst) - 1] != "/":
         dst = dst + "/"
 
-    if len(tracking_dst) > 0 and tracking_dst[len(tracking_dst) - 1] != "/":
-        tracking_dst = tracking_dst + "/"
+    if tracking_dst is not None:
+        if len(tracking_dst) > 0 and tracking_dst[len(tracking_dst) - 1] != "/":
+            tracking_dst = tracking_dst + "/"
 
     #
     # Initialize File Systems
@@ -269,10 +271,15 @@ def main():
         dst, output_s3_endpoint, output_s3_region, output_s3_acl, logger
     )
     tracking_file_system = None
-    if len(tracking_dst) > 0:
-        tracking_file_system = create_file_system(
-            tracking_dst, output_s3_endpoint, output_s3_region, output_s3_acl, logger
-        )
+    if tracking_dst is not None:
+        if len(tracking_dst) > 0:
+            tracking_file_system = create_file_system(
+                tracking_dst,
+                output_s3_endpoint,
+                output_s3_region,
+                output_s3_acl,
+                logger,
+            )
 
     #
     # Check if this task has been completed already
