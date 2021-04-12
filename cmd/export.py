@@ -7,7 +7,6 @@ import logging
 from multiprocessing import get_context
 import os
 from pathlib import Path
-from queue import Empty
 import traceback
 from urllib.parse import urlparse
 import uuid
@@ -160,17 +159,16 @@ def configure_logging():
     return logger
 
 
-def logging_process(queue, timeout=60):
+def logging_process(queue):
     logger = configure_logging()
     while True:
         try:
-            record = queue.get(True, timeout)
+            # Don't add a timeout here, it just adds log noise
+            record = queue.get(True)
             # We send this as a sentinel to tell the listener to quit.
             if record is None:
                 break
             logger.info(record)
-        except Empty:
-            pass
         except Exception:
             print("Error logging record")
             traceback.print_exc()
