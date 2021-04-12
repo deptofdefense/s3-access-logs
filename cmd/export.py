@@ -7,6 +7,7 @@ import logging
 from multiprocessing import get_context
 import os
 from pathlib import Path
+from queue import Empty
 import traceback
 from urllib.parse import urlparse
 import uuid
@@ -168,6 +169,8 @@ def logging_process(queue, timeout=60):
             if record is None:
                 break
             logger.info(record)
+        except Empty:
+            pass
         except Exception:
             print("Error logging record")
             traceback.print_exc()
@@ -255,8 +258,9 @@ def main():
     if dst[len(dst) - 1] != "/":
         dst = dst + "/"
 
-    if len(tracking_dst) > 0 and tracking_dst[len(tracking_dst) - 1] != "/":
-        tracking_dst = tracking_dst + "/"
+    if tracking_dst is not None:
+        if len(tracking_dst) > 0 and tracking_dst[len(tracking_dst) - 1] != "/":
+            tracking_dst = tracking_dst + "/"
 
     #
     # Initialize File Systems
@@ -269,10 +273,15 @@ def main():
         dst, output_s3_endpoint, output_s3_region, output_s3_acl, logger
     )
     tracking_file_system = None
-    if len(tracking_dst) > 0:
-        tracking_file_system = create_file_system(
-            tracking_dst, output_s3_endpoint, output_s3_region, output_s3_acl, logger
-        )
+    if tracking_dst is not None:
+        if len(tracking_dst) > 0:
+            tracking_file_system = create_file_system(
+                tracking_dst,
+                output_s3_endpoint,
+                output_s3_region,
+                output_s3_acl,
+                logger,
+            )
 
     #
     # Check if this task has been completed already
