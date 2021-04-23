@@ -189,9 +189,19 @@ def logging_process(queue):
                 queue.close()
                 break
             logger.info(record)
+        except queue.Empty:
+            print("Queue is empty, killing logging process")
+            queue.close()
+            break
+        except ValueError:
+            print("Queue is closed, killing logging process")
+            queue.close()
+            break
         except Exception:
-            print("Error logging record")
+            print("Queue is broken")
             traceback.print_exc()
+            queue.close()
+            break
 
 
 def main():
