@@ -7,6 +7,7 @@ import logging
 from multiprocessing import get_context
 import os
 from pathlib import Path
+import queue
 import sys
 import traceback
 from urllib.parse import urlparse
@@ -90,7 +91,7 @@ def aggregate_range(
     hour,
     cpu_count,
     timeout,
-    queue,
+    logging_queue,
 ):
 
     items = []
@@ -113,7 +114,7 @@ def aggregate_range(
             wg.add(1)
             pool.apply_async(
                 deserialize_file,
-                args=(f.path, input_file_system, queue),
+                args=(f.path, input_file_system, logging_queue),
                 callback=deserialize_file_callback,
                 error_callback=deserialize_file_error_callback,
             )
@@ -149,7 +150,7 @@ def aggregate_range(
         cpu_count=cpu_count,
         makedirs=(not dst.startswith("s3://")),
         timeout=timeout,
-        queue=queue,
+        logging_queue=logging_queue,
     )
 
     logger.info("Serializing items to {} is complete".format(dst))
@@ -177,30 +178,26 @@ def configure_logging():
     return logger
 
 
-def logging_process(queue):
+def logging_process(logging_queue):
     logger = configure_logging()
     while True:
         try:
             # Don't add a timeout here, it just adds log noise
-            record = queue.get(True)
+            record = logging_queue.get(True)
             # We send 'None' as a sentinel to tell the listener to quit looping.
-            # At the same time tell the queue that no more data is coming.
+            # At the same time tell the logging_queue that no more data is coming.
             if record is None:
-                queue.close()
                 break
             logger.info(record)
         except queue.Empty:
             print("Queue is empty, killing logging process")
-            queue.close()
             break
         except ValueError:
             print("Queue is closed, killing logging process")
-            queue.close()
             break
         except Exception:
             print("Queue is broken")
             traceback.print_exc()
-            queue.close()
             break
 
 
@@ -226,8 +223,8 @@ def main():
     logger = configure_logging()
 
     ctx = get_context("spawn")
-    queue = ctx.Manager().Queue(-1)
-    listener = ctx.Process(target=logging_process, args=(queue,))
+    logging_queue = ctx.Manager().Queue(-1)
+    listener = ctx.Process(target=logging_process, args=(logging_queue,))
     listener.start()
 
     #
@@ -278,11 +275,11 @@ def main():
 
     if src is None or len(src) == 0:
         logger.error("{} is missing".format("src"))
-        graceful_shutdown(listener, queue, 1)
+        graceful_shutdown(listener, logging_queue, 1)
 
     if dst is None or len(dst) == 0:
         logger.error("{} is missing".format("dst"))
-        graceful_shutdown(listener, queue, 1)
+        graceful_shutdown(listener, logging_queue, 1)
 
     if src[len(src) - 1] != "/":
         src = src + "/"
@@ -324,7 +321,7 @@ def main():
         tracking_file = "{}{}".format(tracking_dst, hour)
         if tracking_file_system.exists(tracking_file):
             logger.info("Task completed for hour: {}!".format(tracking_file))
-            graceful_shutdown(listener, queue, 0)
+            graceful_shutdown(listener, logging_queue, 0)
 
     #
     # Load Schema
@@ -341,7 +338,7 @@ def main():
 
     if len(all_files) == 0:
         logger.info("no source files found within folder {}".format(src))
-        graceful_shutdown(listener, queue, 0)
+        graceful_shutdown(listener, logging_queue, 0)
 
     logger.info("List all files:")
     logger.info(all_files)
@@ -360,7 +357,7 @@ def main():
                 logger.info("Read test success!")
         else:
             logger.error("Unable to prove file {} exists".format(read_test))
-            graceful_shutdown(listener, queue, 1)
+            graceful_shutdown(listener, logging_queue, 1)
 
     if output_file_system is not None:
         logger.info("Test output filesystem")
@@ -394,17 +391,17 @@ def main():
         hour,
         cpu_count,
         timeout,
-        queue,
+        logging_queue,
     )
 
-    graceful_shutdown(listener, queue, 0)
+    graceful_shutdown(listener, logging_queue, 0)
 
 
-def graceful_shutdown(listener, queue, exit_code):
+def graceful_shutdown(listener, logging_queue, exit_code):
 
-    # Put one last record on the queue to kill it and then wait
-    queue.put_nowait(None)
-    queue.join()
+    # Put one last record on the logging_queue to kill it and then wait
+    logging_queue.put_nowait(None)
+    logging_queue.join()
 
     # Now disable the listener
     listener.join()
