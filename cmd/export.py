@@ -401,7 +401,6 @@ def graceful_shutdown(listener, logging_queue, exit_code):
 
     # Put one last record on the logging_queue to kill it and then wait
     logging_queue.put_nowait(None)
-    logging_queue.join()
 
     # Now disable the listener
     listener.join()
