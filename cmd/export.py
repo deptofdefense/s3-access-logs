@@ -7,6 +7,7 @@ import logging
 from multiprocessing import get_context
 import os
 from pathlib import Path
+import sys
 import traceback
 from urllib.parse import urlparse
 import uuid
@@ -75,6 +76,7 @@ def create_file_system(root, endpoint_url, endpoint_region, s3_acl, logger):
 
 
 def aggregate_range(
+    ctx,
     src,
     dst,
     files,
@@ -82,7 +84,10 @@ def aggregate_range(
     logger,
     schema,
     input_file_system,
-    outputFileSystem,
+    output_file_system,
+    tracking_file_system,
+    tracking_dst,
+    hour,
     cpu_count,
     timeout,
     queue,
@@ -92,7 +97,7 @@ def aggregate_range(
 
     logger.info("Deserializing data in files from {}".format(src))
 
-    with get_context("spawn").Pool(processes=int(cpu_count)) as pool:
+    with ctx.Pool(processes=int(cpu_count)) as pool:
 
         wg = WaitGroup()
 
@@ -120,6 +125,7 @@ def aggregate_range(
     logger.info("Deserialization data in files complete")
 
     if len(items) == 0:
+        logger.info("No items found in filesystem")
         return
 
     gc.collect()
@@ -139,7 +145,7 @@ def aggregate_range(
         partition_cols=["bucket_name", "operation", "year", "month", "day", "hour"],
         partition_filename_cb=lambda x: "-".join([str(y) for y in x]) + ".parquet",
         row_group_cols=["requester", "remoteip_int", "is_assumed_role", "is_user"],
-        fs=outputFileSystem,
+        fs=output_file_system,
         cpu_count=cpu_count,
         makedirs=(not dst.startswith("s3://")),
         timeout=timeout,
@@ -147,6 +153,18 @@ def aggregate_range(
     )
 
     logger.info("Serializing items to {} is complete".format(dst))
+
+    if tracking_file_system is not None:
+        logger.info("Tracking completion of task")
+        tracking_file = "{}{}".format(tracking_dst, hour)
+        tracking_file_system.touch(tracking_file)
+        with s3fs.S3File(tracking_file_system, tracking_file, mode="wb") as f:
+            f.write(
+                bytearray(
+                    "Completed hour {}. Now: {}\n".format(hour, datetime.now()), "utf-8"
+                )
+            )
+        logger.info("Successful creation file: {}!".format(tracking_file))
 
 
 def configure_logging():
@@ -165,8 +183,10 @@ def logging_process(queue):
         try:
             # Don't add a timeout here, it just adds log noise
             record = queue.get(True)
-            # We send this as a sentinel to tell the listener to quit.
+            # We send 'None' as a sentinel to tell the listener to quit looping.
+            # At the same time tell the queue that no more data is coming.
             if record is None:
+                queue.close()
                 break
             logger.info(record)
         except Exception:
@@ -194,8 +214,10 @@ def main():
     #
 
     logger = configure_logging()
-    queue = get_context("spawn").Manager().Queue(-1)
-    listener = get_context("spawn").Process(target=logging_process, args=(queue,))
+
+    ctx = get_context("spawn")
+    queue = ctx.Manager().Queue(-1)
+    listener = ctx.Process(target=logging_process, args=(queue,))
     listener.start()
 
     #
@@ -245,10 +267,12 @@ def main():
     logger.info("output_s3_endpoint: {}".format(output_s3_endpoint))
 
     if src is None or len(src) == 0:
-        raise Exception("{} is missing".format("src"))
+        logger.error("{} is missing".format("src"))
+        graceful_shutdown(listener, queue, 1)
 
     if dst is None or len(dst) == 0:
-        raise Exception("{} is missing".format("dst"))
+        logger.error("{} is missing".format("dst"))
+        graceful_shutdown(listener, queue, 1)
 
     if src[len(src) - 1] != "/":
         src = src + "/"
@@ -290,7 +314,7 @@ def main():
         tracking_file = "{}{}".format(tracking_dst, hour)
         if tracking_file_system.exists(tracking_file):
             logger.info("Task completed for hour: {}!".format(tracking_file))
-            return None
+            graceful_shutdown(listener, queue, 0)
 
     #
     # Load Schema
@@ -307,7 +331,7 @@ def main():
 
     if len(all_files) == 0:
         logger.info("no source files found within folder {}".format(src))
-        return None
+        graceful_shutdown(listener, queue, 0)
 
     logger.info("List all files:")
     logger.info(all_files)
@@ -325,7 +349,8 @@ def main():
                 logger.info("Lines in first file: {}".format(line_count))
                 logger.info("Read test success!")
         else:
-            raise Exception("Unable to prove file {} exists".format(read_test))
+            logger.error("Unable to prove file {} exists".format(read_test))
+            graceful_shutdown(listener, queue, 1)
 
     if output_file_system is not None:
         logger.info("Test output filesystem")
@@ -343,7 +368,9 @@ def main():
         logger.info("Successfully deleted file: {}".format(write_test))
         logger.info("Write test success for file {}!".format(write_test))
 
+    # The bulk of the work happens here
     aggregate_range(
+        ctx,
         src,
         dst,
         all_files,
@@ -352,33 +379,34 @@ def main():
         schema,
         input_file_system,
         output_file_system,
+        tracking_file_system,
+        tracking_dst,
+        hour,
         cpu_count,
         timeout,
         queue,
     )
 
+    graceful_shutdown(listener, queue, 0)
+
+
+def graceful_shutdown(listener, queue, exit_code):
+
     # Put one last record on the queue to kill it and then wait
     queue.put_nowait(None)
+    queue.join()
+
+    # Now disable the listener
     listener.join()
     listener.close()
 
-    if tracking_file_system is not None:
-        logger.info("Tracking completion of task")
-        tracking_file = "{}{}".format(tracking_dst, hour)
-        tracking_file_system.touch(tracking_file)
-        with s3fs.S3File(tracking_file_system, tracking_file, mode="wb") as f:
-            f.write(
-                bytearray(
-                    "Completed hour {}. Now: {}\n".format(hour, datetime.now()), "utf-8"
-                )
-            )
-        logger.info("Successful creation file: {}!".format(tracking_file))
-
-    return None
+    # Call an exit
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":
     try:
         main()
-    except Exception as e:
-        print(e)
+    except Exception:
+        traceback.print_exc()
+        sys.exit(1)
