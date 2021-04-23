@@ -192,7 +192,7 @@ def logging_process(logging_queue):
         except queue.Empty:
             print("Queue is empty, killing logging process")
             break
-        except ValueError:
+        except (ValueError, EOFError):
             print("Queue is closed, killing logging process")
             break
         except Exception:
